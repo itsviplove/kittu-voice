@@ -1,0 +1,28 @@
+{
+  "name": "kittu-voice",
+  "version": "0.1.0",
+  "description": "Discord voice assistant scaffold designed for 6GB VRAM-friendly local audio pipelines and OpenClaw integration.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "kittu-voice": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js start",
+    "dev": "node --watch src/index.js",
+    "smoke": "node src/index.js smoke",
+    "check": "node --test",
+    "test": "node --test"
+  },
+  "keywords": [
+    "discord",
+    "voice",
+    "assistant",
+    "openclaw"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
