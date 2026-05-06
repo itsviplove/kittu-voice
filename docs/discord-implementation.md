@@ -6,6 +6,8 @@
 - Connect to one voice channel
 - Add `/join` and `/leave`
 - Add `/say` test command
+- Add `/status` and `/help`
+- Validate command router without live voice first
 
 ## Phase 2
 - Capture user voice audio
@@ -25,4 +27,5 @@
 2. Run `npm run smoke`
 3. Start the server with `npm start`
 4. Verify `http://127.0.0.1:8787`
-5. Later, test `/join`, `/say`, and live voice capture in Discord
+5. Inspect smoke output for `commandStatus` and `commandSay`
+6. Later, test `/join`, `/say`, and live voice capture in Discord
