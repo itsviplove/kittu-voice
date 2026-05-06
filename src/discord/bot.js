@@ -14,6 +14,7 @@ import {
 } from '@discordjs/voice';
 
 import { createDiscordCommandRouter } from './commands.js';
+import { createVoiceCaptureManager } from '../pipeline/voiceCapture.js';
 
 function isCommandText(text, prefix = '!') {
   const value = String(text || '').trim();
@@ -22,6 +23,29 @@ function isCommandText(text, prefix = '!') {
 
 export function createDiscordBot({ config, logger, pipeline }) {
   const router = createDiscordCommandRouter({ config, logger, pipeline });
+  const voiceCapture = createVoiceCaptureManager({
+    logger,
+    onCapture: async (capture) => {
+      if (!config.discordVoiceAutoRespond) return;
+      try {
+        const transcript = await pipeline.transcribeCapture(capture);
+        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId });
+        if (reply?.text) {
+          await speakInVoice(reply.text, 'default');
+        }
+        logger.info('Processed Discord voice capture', {
+          userId: capture.userId,
+          transcript: transcript.text,
+          reply: reply?.text || null,
+        });
+      } catch (error) {
+        logger.error('Discord voice capture processing failed', {
+          userId: capture.userId,
+          message: error.message,
+        });
+      }
+    },
+  });
   const commandPrefix = config.discordCommandPrefix || '!';
   const autoJoinVoice = config.discordVoiceAutoJoin !== false;
   const welcomeText = config.discordVoiceWelcomeText || 'Kittu Voice is online.';
@@ -124,7 +148,13 @@ export function createDiscordBot({ config, logger, pipeline }) {
 
     const existing = getVoiceConnection(guildId);
     if (existing) {
-      existing.destroy();
+      const existingChannelId = existing.joinConfig?.channelId;
+      if (existingChannelId && existingChannelId !== channelId) {
+        existing.destroy();
+      } else {
+        voiceConnection = existing;
+        return { ok: true, channelId, guildId, channelName: channel.name || null, reused: true };
+      }
     }
 
     ensureAudioPlayer();
@@ -139,6 +169,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
     voiceConnection.subscribe(audioPlayer);
 
     await entersState(voiceConnection, VoiceConnectionStatus.Ready, 20_000);
+    await voiceCapture.start(voiceConnection);
 
     logger.info('Joined Discord voice channel', {
       channelId,
@@ -155,6 +186,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
 
   async function leaveVoiceChannel() {
     if (voiceConnection) {
+      await voiceCapture.stop();
       voiceConnection.destroy();
       voiceConnection = null;
       return { ok: true, message: 'Disconnected from voice channel.' };
@@ -375,6 +407,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
       await startupGate;
     },
     async stop() {
+      await voiceCapture.stop();
       if (voiceConnection) {
         voiceConnection.destroy();
         voiceConnection = null;
@@ -401,6 +434,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
         configured: Boolean(config.discordToken),
         voiceChannelId: config.discordVoiceChannelId || null,
         connected: Boolean(voiceConnection),
+        voiceCapture: voiceCapture.getStatus(),
         commands: router.commands,
       };
     },
