@@ -4,6 +4,7 @@
 - Create Discord bot account
 - Add token to `.env`
 - Set default voice channel to `1493512967776637092`
+- Enable `Message Content` and voice intents in the Discord app settings
 - Connect to one voice channel
 - Add `/join` and `/leave`
 - Add `/say` test command
@@ -16,6 +17,7 @@
 - Transcribe with Whisper tiny/base
 - Send transcript to OpenClaw
 - Speak reply back into Discord
+- Keep the voice bridge focused on the configured channel `1493512967776637092`
 
 ## Phase 3
 - Add per-channel memory
@@ -29,4 +31,6 @@
 3. Start the server with `npm start`
 4. Verify `http://127.0.0.1:8787`
 5. Inspect smoke output for `commandStatus` and `commandSay`
-6. Later, test `/join`, `/say`, and live voice capture in Discord using channel `1493512967776637092`
+6. Set `DISCORD_TOKEN`, `DISCORD_VOICE_CHANNEL_ID=1493512967776637092`, and `DISCORD_VOICE_AUTO_JOIN=true`
+7. Start the bot and confirm it joins `general` and speaks the welcome text
+8. Send `!say hello` in Discord and confirm playback
