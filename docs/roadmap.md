@@ -4,6 +4,7 @@
 - CLI entrypoint
 - Config loader
 - Status server
+- Discord command router scaffold
 - Stub Discord bot
 - Stub OpenClaw client
 - Stub STT/TTS pipeline
