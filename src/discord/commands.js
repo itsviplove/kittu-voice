@@ -10,7 +10,7 @@ export function createDiscordCommandRouter({ config, logger, pipeline }) {
       commandPrefix: config.discordCommandPrefix || '!',
       openClawConfigured: Boolean(config.openClawBaseUrl),
       commands: DEFAULT_COMMANDS,
-      voiceMode: 'scaffold-only',
+      voiceMode: 'conversational-voice-agent',
     };
   }
 
