@@ -73,10 +73,28 @@ export function createConversationMemory({ logger, rootDir } = {}) {
     }
   }
 
+  async function buildSummary(scope = {}, limit = 8) {
+    const turns = await readRecent(scope, limit);
+    const userTurns = turns.filter((turn) => turn.speaker === 'user');
+    const assistantTurns = turns.filter((turn) => turn.speaker === 'assistant');
+    const lastUser = [...userTurns].reverse()[0] || null;
+    const lastAssistant = [...assistantTurns].reverse()[0] || null;
+
+    return {
+      totalTurns: turns.length,
+      userTurns: userTurns.length,
+      assistantTurns: assistantTurns.length,
+      lastUserText: lastUser?.text || null,
+      lastAssistantText: lastAssistant?.text || null,
+      recentTurns: turns,
+    };
+  }
+
   return {
     memoryRoot,
     filePathForScope,
     appendTurn,
     readRecent,
+    buildSummary,
   };
 }
