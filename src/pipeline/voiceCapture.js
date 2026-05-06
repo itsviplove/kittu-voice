@@ -15,6 +15,7 @@ function safeName(value = '') {
 export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
   const captureRoot = rootDir || path.join(process.cwd(), '.kittu-voice-captures');
   const active = new Map();
+  const finalizing = new Set();
   const recentCaptures = [];
   let connection = null;
   let speakingStartHandler = null;
@@ -31,12 +32,36 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
   }
 
   async function finalizeCapture(userId, reason = 'ended') {
+    if (finalizing.has(userId)) return null;
     const current = active.get(userId);
     if (!current) return null;
+
+    finalizing.add(userId);
 
     active.delete(userId);
     current.endedAt = new Date().toISOString();
     current.durationMs = new Date(current.endedAt).getTime() - new Date(current.startedAt).getTime();
+
+    if (Number.isFinite(current.durationMs) && current.durationMs < (current.minDurationMs || 0)) {
+      finalizing.delete(userId);
+      try {
+        current.stream.destroy();
+        current.writeStream.end();
+      } catch {
+        // ignore cleanup
+      }
+      try {
+        await writeStreamCleanup(current.filePath);
+      } catch {
+        // ignore cleanup
+      }
+      logger?.info?.('Skipped short Discord voice capture', {
+        userId,
+        durationMs: current.durationMs,
+        reason,
+      });
+      return null;
+    }
 
     await new Promise((resolve) => {
       current.stream.once('close', resolve);
@@ -63,10 +88,20 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
     if (onCapture) {
       void onCapture(capture);
     }
+    finalizing.delete(userId);
     return capture;
   }
 
-  async function startStreamForUser(userId) {
+  async function writeStreamCleanup(filePath) {
+    try {
+      const { unlink } = await import('node:fs/promises');
+      await unlink(filePath);
+    } catch {
+      // ignore cleanup
+    }
+  }
+
+  async function startStreamForUser(userId, options = {}) {
     if (!connection?.receiver) return null;
     if (active.has(userId)) return active.get(userId);
 
@@ -78,7 +113,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
     const stream = connection.receiver.subscribe(userId, {
       end: {
         behavior: EndBehaviorType.AfterSilence,
-        duration: 1200,
+        duration: options.endSilenceMs || 900,
       },
     });
     const writeStream = createWriteStream(filePath);
@@ -88,6 +123,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       startedAt: startedAt.toISOString(),
       endedAt: null,
       durationMs: null,
+      minDurationMs: options.minDurationMs || 0,
       filePath,
       format: 'opus',
       stream,
@@ -144,7 +180,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
   }
 
   return {
-    async start(voiceConnection) {
+    async start(voiceConnection, options = {}) {
       stopAll();
       connection = voiceConnection;
       if (!connection?.receiver) {
@@ -152,7 +188,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       }
 
       speakingStartHandler = (userId) => {
-        void startStreamForUser(userId);
+        void startStreamForUser(userId, options);
       };
       speakingEndHandler = (userId) => {
         void finalizeCapture(userId, 'speaking-end');
