@@ -6,6 +6,8 @@ export function createDiscordCommandRouter({ config, logger, pipeline }) {
       botConfigured: Boolean(config.discordToken),
       guildId: config.discordGuildId || null,
       voiceChannelId: config.discordVoiceChannelId || null,
+      voiceAutoJoin: config.discordVoiceAutoJoin !== false,
+      commandPrefix: config.discordCommandPrefix || '!',
       openClawConfigured: Boolean(config.openClawBaseUrl),
       commands: DEFAULT_COMMANDS,
       voiceMode: 'scaffold-only',
