@@ -16,9 +16,9 @@ export function createAudioPipeline({ logger, openClaw }) {
         userId: capture?.userId,
       });
     },
-    async generateReply({ text, userId, history = [] }) {
+    async generateReply({ text, userId, history = [], summary = null }) {
       if (openClaw?.isConfigured?.()) {
-        return openClaw.generateResponse({ text, userId, history });
+        return openClaw.generateResponse({ text, userId, history, summary });
       }
 
       return {
