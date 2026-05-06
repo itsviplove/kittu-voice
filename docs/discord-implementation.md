@@ -13,8 +13,8 @@
 
 ## Phase 2
 - Capture user voice audio and save Opus chunks per speaking turn
-- Add silence/VAD turn detection
-- Transcribe with Whisper tiny/base
+- Add silence/VAD turn detection (current capture end behavior is silence-based)
+- Transcribe with Whisper tiny/base or a compatible CLI via `WHISPER_BIN` (fallback stays safe when unset)
 - Send transcript to OpenClaw
 - Speak reply back into Discord
 - Optional end-to-end voice loop via `DISCORD_VOICE_AUTO_RESPOND=true`
