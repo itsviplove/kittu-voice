@@ -14,6 +14,7 @@ import {
 } from '@discordjs/voice';
 
 import { createDiscordCommandRouter } from './commands.js';
+import { createConversationMemory } from '../pipeline/conversationMemory.js';
 import { createVoiceCaptureManager } from '../pipeline/voiceCapture.js';
 
 function isCommandText(text, prefix = '!') {
@@ -23,16 +24,50 @@ function isCommandText(text, prefix = '!') {
 
 export function createDiscordBot({ config, logger, pipeline }) {
   const router = createDiscordCommandRouter({ config, logger, pipeline });
+  const conversationMemory = createConversationMemory({ logger });
   const voiceCapture = createVoiceCaptureManager({
     logger,
     onCapture: async (capture) => {
       if (!config.discordVoiceAutoRespond) return;
       try {
         const transcript = await pipeline.transcribeCapture(capture);
-        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId });
+        const turn = {
+          guildId: capture.guildId || config.discordGuildId || 'global',
+          channelId: capture.channelId || config.discordVoiceChannelId || 'default',
+          userId: capture.userId,
+          speaker: 'user',
+          text: transcript.text,
+          transcript,
+          capturePath: capture.filePath,
+          meta: { reason: capture.reason, durationMs: capture.durationMs },
+        };
+
+        const recentTurns = await conversationMemory.readRecent({ guildId: turn.guildId, channelId: turn.channelId }, 8);
+        const shouldReply = shouldRespondToTranscript(transcript.text);
+
+        await conversationMemory.appendTurn(turn);
+
+        if (!shouldReply) {
+          logger.info('Captured voice turn stored without reply', {
+            userId: capture.userId,
+            transcript: transcript.text,
+          });
+          return;
+        }
+
+        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId, history: recentTurns });
         if (reply?.text) {
           await speakInVoice(reply.text, 'default');
         }
+        await conversationMemory.appendTurn({
+          guildId: turn.guildId,
+          channelId: turn.channelId,
+          userId: 'kittu',
+          speaker: 'assistant',
+          text: reply?.text || '',
+          reply,
+          meta: { source: reply?.source || null },
+        });
         logger.info('Processed Discord voice capture', {
           userId: capture.userId,
           transcript: transcript.text,
@@ -49,6 +84,8 @@ export function createDiscordBot({ config, logger, pipeline }) {
   const commandPrefix = config.discordCommandPrefix || '!';
   const autoJoinVoice = config.discordVoiceAutoJoin !== false;
   const welcomeText = config.discordVoiceWelcomeText || 'Kittu Voice is online.';
+  const wakePhrase = String(config.discordVoiceWakePhrase || 'kittu').toLowerCase();
+  const respondToAll = config.discordVoiceRespondToAll === true;
 
   let client = null;
   let audioPlayer = null;
@@ -169,7 +206,10 @@ export function createDiscordBot({ config, logger, pipeline }) {
     voiceConnection.subscribe(audioPlayer);
 
     await entersState(voiceConnection, VoiceConnectionStatus.Ready, 20_000);
-    await voiceCapture.start(voiceConnection);
+    await voiceCapture.start(voiceConnection, {
+      minDurationMs: config.discordVoiceMinTurnMs,
+      endSilenceMs: config.discordVoiceEndSilenceMs,
+    });
 
     logger.info('Joined Discord voice channel', {
       channelId,
@@ -182,6 +222,16 @@ export function createDiscordBot({ config, logger, pipeline }) {
     }
 
     return { ok: true, channelId, guildId, channelName: channel.name || null };
+  }
+
+  function shouldRespondToTranscript(text) {
+    if (respondToAll) return true;
+    const normalized = String(text || '').toLowerCase();
+    if (!normalized) return false;
+    if (normalized.includes(wakePhrase)) return true;
+    if (/\?$/.test(normalized.trim())) return true;
+    if (/^(hey|hi|hello)\b/i.test(normalized)) return true;
+    return false;
   }
 
   async function leaveVoiceChannel() {
@@ -435,6 +485,9 @@ export function createDiscordBot({ config, logger, pipeline }) {
         voiceChannelId: config.discordVoiceChannelId || null,
         connected: Boolean(voiceConnection),
         voiceCapture: voiceCapture.getStatus(),
+        conversationMemory: conversationMemory.memoryRoot,
+        wakePhrase,
+        respondToAll,
         commands: router.commands,
       };
     },
