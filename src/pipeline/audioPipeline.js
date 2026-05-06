@@ -16,13 +16,13 @@ export function createAudioPipeline({ logger, openClaw }) {
         userId: capture?.userId,
       });
     },
-    async generateReply({ text, userId }) {
+    async generateReply({ text, userId, history = [] }) {
       if (openClaw?.isConfigured?.()) {
-        return openClaw.generateResponse({ text, userId });
+        return openClaw.generateResponse({ text, userId, history });
       }
 
       return {
-        text: `Echo: ${text}`,
+        text: history.length ? `Echo: ${text} (context turns: ${history.length})` : `Echo: ${text}`,
         source: 'local-echo',
       };
     },
