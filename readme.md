@@ -40,7 +40,7 @@ This repo is a scaffold. It currently includes:
 
 ## Limitations
 
-- Real Discord voice capture/receive is scaffolded, but Whisper is still a stub
+- Real Discord voice capture/receive is scaffolded; STT uses a Whisper CLI if configured, otherwise falls back safely
 - TTS is still basic and meant for testing, not production
 - No queueing, session memory, or conversation state yet
 - No production auth/retry logic yet
@@ -79,6 +79,11 @@ npm start
 - `DISCORD_VOICE_CHANNEL_ID` - default voice channel target (`1493512967776637092`)
 - `DISCORD_VOICE_AUTO_JOIN` - auto-join the configured voice channel on startup (`true`/`false`)
 - `DISCORD_VOICE_AUTO_RESPOND` - optionally auto-transcribe/reply after a captured utterance (`true`/`false`)
+- `FFMPEG_PATH` - optional path to an ffmpeg binary
+- `WHISPER_BIN` - optional Whisper CLI / whisper.cpp binary path
+- `WHISPER_MODEL` - Whisper model name for the CLI, default `tiny`
+- `WHISPER_LANGUAGE` - Whisper language hint, default `en`
+- `WHISPER_OUTPUT_DIR` - optional transcript output directory
 - `DISCORD_VOICE_WELCOME_TEXT` - text the bot speaks after joining
 - `DISCORD_COMMAND_PREFIX` - message command prefix, default `!`
 - `OPENCLAW_BASE_URL` - OpenClaw endpoint
