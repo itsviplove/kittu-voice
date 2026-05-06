@@ -3,11 +3,13 @@ export function createOpenClawClient({ config, logger }) {
     isConfigured() {
       return Boolean(config.openClawBaseUrl);
     },
-    async generateResponse({ text, userId }) {
+    async generateResponse({ text, userId, history = [] }) {
       if (!config.openClawBaseUrl) {
         logger.debug('OpenClaw base URL missing; using local fallback response');
         return {
-          text: `Local fallback reply for ${userId}: ${text}`,
+          text: history.length
+            ? `Local fallback reply for ${userId}: ${text} (context turns: ${history.length})`
+            : `Local fallback reply for ${userId}: ${text}`,
           source: 'local-fallback',
         };
       }
