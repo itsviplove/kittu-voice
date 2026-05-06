@@ -6,5 +6,6 @@ export function loadConfig() {
     discordGuildId: process.env.DISCORD_GUILD_ID || '',
     openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
     openClawApiKey: process.env.OPENCLAW_API_KEY || '',
+    discordVoiceChannelId: process.env.DISCORD_VOICE_CHANNEL_ID || '1493512967776637092',
   };
 }
