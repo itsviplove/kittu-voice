@@ -22,6 +22,7 @@ This repo is a scaffold. It currently includes:
 - HTTP status server
 - Config loader
 - Discord command router scaffold (`/join`, `/leave`, `/say`, `/status`, `/help`)
+- Discord slash command registration for `/join`, `/leave`, `/say`, `/status`, `/help`
 - Discord voice join/playback path for the configured channel
 - Stub OpenClaw client
 - Placeholder STT / reply / TTS pipeline
