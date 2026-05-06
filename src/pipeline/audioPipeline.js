@@ -9,6 +9,13 @@ export function createAudioPipeline({ logger, openClaw }) {
     async transcribe(input) {
       return stt.transcribe(input);
     },
+    async transcribeCapture(capture) {
+      return stt.transcribe({
+        type: 'opus-file',
+        path: capture?.filePath,
+        userId: capture?.userId,
+      });
+    },
     async generateReply({ text, userId }) {
       if (openClaw?.isConfigured?.()) {
         return openClaw.generateResponse({ text, userId });
