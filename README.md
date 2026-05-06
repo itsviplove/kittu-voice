@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/itsviplove/kittu-voice)](https://github.com/itsviplove/kittu-voice/releases)
 [![License](https://img.shields.io/github/license/itsviplove/kittu-voice)](https://github.com/itsviplove/kittu-voice/blob/main/LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)](https://nodejs.org/)
 
 Kittu Voice is a Discord voice assistant scaffold built for modest hardware, with a target of fitting into ~6 GB VRAM workflows by keeping the first audio stack lightweight.
 
@@ -22,7 +22,7 @@ This repo is a scaffold. It currently includes:
 - HTTP status server
 - Config loader
 - Discord command router scaffold (`/join`, `/leave`, `/say`, `/status`, `/help`)
-- Stub Discord bot adapter
+- Discord voice join/playback path for the configured channel
 - Stub OpenClaw client
 - Placeholder STT / reply / TTS pipeline
 - Smoke-test path
@@ -37,8 +37,8 @@ This repo is a scaffold. It currently includes:
 
 ## Limitations
 
-- No real Discord voice capture/playback yet
-- No real VAD, STT, or TTS integration yet
+- No real Discord voice capture/receive yet
+- TTS is still basic and meant for testing, not production
 - No queueing, session memory, or conversation state yet
 - No production auth/retry logic yet
 - Performance target is realistic, not guaranteed
@@ -74,6 +74,9 @@ npm start
 - `DISCORD_TOKEN` - Discord bot token
 - `DISCORD_GUILD_ID` - optional guild scope
 - `DISCORD_VOICE_CHANNEL_ID` - default voice channel target (`1493512967776637092`)
+- `DISCORD_VOICE_AUTO_JOIN` - auto-join the configured voice channel on startup (`true`/`false`)
+- `DISCORD_VOICE_WELCOME_TEXT` - text the bot speaks after joining
+- `DISCORD_COMMAND_PREFIX` - message command prefix, default `!`
 - `OPENCLAW_BASE_URL` - OpenClaw endpoint
 - `OPENCLAW_API_KEY` - OpenClaw auth key
 
