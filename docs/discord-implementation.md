@@ -33,4 +33,5 @@
 5. Inspect smoke output for `commandStatus` and `commandSay`
 6. Set `DISCORD_TOKEN`, `DISCORD_VOICE_CHANNEL_ID=1493512967776637092`, and `DISCORD_VOICE_AUTO_JOIN=true`
 7. Start the bot and confirm it joins `general` and speaks the welcome text
-8. Send `!say hello` in Discord and confirm playback
+8. Prefer slash commands: send `/say text: hello` in Discord and confirm playback
+9. If using prefix commands, send `!say hello`; this requires Message Content Intent
