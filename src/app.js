@@ -17,6 +17,7 @@ export function createApp({ logger }) {
       logger.info('Starting Kittu Voice scaffold', {
         port: config.port,
         discordEnabled: discordBot.isConfigured(),
+        voiceChannelId: config.discordVoiceChannelId,
         openClawConfigured: openClaw.isConfigured(),
       });
 
