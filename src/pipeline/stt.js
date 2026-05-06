@@ -1,8 +1,15 @@
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { access, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 import ffmpegStatic from 'ffmpeg-static';
+import { fileURLToPath } from 'node:url';
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const workspaceRoot = path.resolve(projectRoot, '..');
+const whisperToolRoot = path.join(workspaceRoot, 'tools', 'whispercpp');
+const whisperDefaultBin = path.join(whisperToolRoot, 'bin', 'Release', 'whisper-cli.exe');
+const whisperDefaultModel = path.join(whisperToolRoot, 'models', 'ggml-base.bin');
 
 function runCommand(command, args, { logger } = {}) {
   return new Promise((resolve, reject) => {
@@ -45,8 +52,11 @@ async function ensureWavFromOpus(inputPath, logger) {
 }
 
 async function runWhisperCli(wavPath, logger) {
-  const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI;
-  if (!whisperBin) {
+  const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI || whisperDefaultBin;
+  const whisperModel = process.env.WHISPER_MODEL || whisperDefaultModel;
+  try {
+    await access(whisperBin);
+  } catch {
     return {
       text: 'whisper stub: configure WHISPER_BIN to transcribe this capture',
       model: 'stub-whisper',
@@ -54,41 +64,22 @@ async function runWhisperCli(wavPath, logger) {
     };
   }
 
-  const whisperModel = process.env.WHISPER_MODEL || 'tiny';
   const whisperLanguage = process.env.WHISPER_LANGUAGE || 'en';
-  const whisperOutputDir = process.env.WHISPER_OUTPUT_DIR || path.join(process.cwd(), '.kittu-voice-whisper');
-  await mkdir(whisperOutputDir, { recursive: true });
+  const args = ['-m', whisperModel, '-l', whisperLanguage === 'auto' ? 'auto' : whisperLanguage, '-nt', '-np', '-f', wavPath];
 
-  const prefix = path.join(whisperOutputDir, `capture-${Date.now()}`);
-  const args = [
-    '--model', whisperModel,
-    '--language', whisperLanguage,
-    '--output_dir', whisperOutputDir,
-    '--output_format', 'txt',
-    wavPath,
-  ];
-
-  await runCommand(whisperBin, args, { logger });
-
-  const txtPath = `${prefix}.txt`;
-  const altTxtPath = `${path.basename(wavPath, path.extname(wavPath))}.txt`;
-
-  for (const candidate of [txtPath, path.join(whisperOutputDir, altTxtPath)]) {
-    try {
-      const content = await readFile(candidate, 'utf8');
-      return {
-        text: content.trim() || '(empty transcript)',
-        model: whisperModel,
-        source: 'whisper-cli',
-      };
-    } catch {
-      // try next candidate
-    }
+  const output = await runCommand(whisperBin, args, { logger });
+  const text = output.stdout.trim();
+  if (text) {
+    return {
+      text,
+      model: path.basename(whisperModel),
+      source: 'whisper-cli',
+    };
   }
 
   return {
     text: '(no transcript produced)',
-    model: whisperModel,
+    model: path.basename(whisperModel),
     source: 'whisper-cli',
   };
 }
