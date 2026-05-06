@@ -3,6 +3,7 @@
 ## Phase 1
 - Create Discord bot account
 - Add token to `.env`
+- Set default voice channel to `1493512967776637092`
 - Connect to one voice channel
 - Add `/join` and `/leave`
 - Add `/say` test command
@@ -28,4 +29,4 @@
 3. Start the server with `npm start`
 4. Verify `http://127.0.0.1:8787`
 5. Inspect smoke output for `commandStatus` and `commandSay`
-6. Later, test `/join`, `/say`, and live voice capture in Discord
+6. Later, test `/join`, `/say`, and live voice capture in Discord using channel `1493512967776637092`
