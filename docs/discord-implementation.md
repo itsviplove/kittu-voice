@@ -12,11 +12,12 @@
 - Validate command router without live voice first
 
 ## Phase 2
-- Capture user voice audio
+- Capture user voice audio and save Opus chunks per speaking turn
 - Add silence/VAD turn detection
 - Transcribe with Whisper tiny/base
 - Send transcript to OpenClaw
 - Speak reply back into Discord
+- Optional end-to-end voice loop via `DISCORD_VOICE_AUTO_RESPOND=true`
 - Keep the voice bridge focused on the configured channel `1493512967776637092`
 
 ## Phase 3
