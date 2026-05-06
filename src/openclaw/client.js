@@ -3,7 +3,7 @@ export function createOpenClawClient({ config, logger }) {
     isConfigured() {
       return Boolean(config.openClawBaseUrl);
     },
-    async generateResponse({ text, userId, history = [] }) {
+    async generateResponse({ text, userId, history = [], summary = null }) {
       if (!config.openClawBaseUrl) {
         logger.debug('OpenClaw base URL missing; using local fallback response');
         return {
