@@ -43,6 +43,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
         };
 
         const recentTurns = await conversationMemory.readRecent({ guildId: turn.guildId, channelId: turn.channelId }, 8);
+        const summary = await conversationMemory.buildSummary({ guildId: turn.guildId, channelId: turn.channelId }, 8);
         const shouldReply = shouldRespondToTranscript(transcript.text);
 
         await conversationMemory.appendTurn(turn);
@@ -55,7 +56,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
           return;
         }
 
-        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId, history: recentTurns });
+        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId, history: recentTurns, summary });
         if (reply?.text) {
           await speakInVoice(reply.text, 'default');
         }
@@ -72,6 +73,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
           userId: capture.userId,
           transcript: transcript.text,
           reply: reply?.text || null,
+          summaryTurns: summary.totalTurns,
         });
       } catch (error) {
         logger.error('Discord voice capture processing failed', {
@@ -486,6 +488,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
         connected: Boolean(voiceConnection),
         voiceCapture: voiceCapture.getStatus(),
         conversationMemory: conversationMemory.memoryRoot,
+        conversationSummary: 'available per channel',
         wakePhrase,
         respondToAll,
         commands: router.commands,
