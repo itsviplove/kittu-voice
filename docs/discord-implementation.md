@@ -17,6 +17,8 @@
 - Transcribe with the bundled Whisper.cpp base model by default; override with `WHISPER_BIN` / `WHISPER_MODEL` if needed (fallback stays safe when decode fails)
 - Send transcript to OpenClaw
 - Speak reply back into Discord
+- Save per-channel transcript history in `.kittu-voice-history/`
+- Default to reply-to-all conversational mode; use `DISCORD_VOICE_RESPOND_TO_ALL=false` to require the wake phrase
 - Optional end-to-end voice loop via `DISCORD_VOICE_AUTO_RESPOND=true`
 - Keep the voice bridge focused on the configured channel `1493512967776637092`
 
