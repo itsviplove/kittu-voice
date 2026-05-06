@@ -11,6 +11,7 @@ Kittu Voice is a Discord voice assistant scaffold built for modest hardware, wit
 - Discord voice assistant foundation
 - Local-first audio pipeline shape
 - OpenClaw bridge point for responses and orchestration
+- Default test voice channel: `1493512967776637092`
 - Designed to grow in phases, not pretend the full system exists yet
 
 ## Current state
@@ -72,6 +73,7 @@ npm start
 - `LOG_LEVEL` - `debug`, `info`, `warn`, `error`
 - `DISCORD_TOKEN` - Discord bot token
 - `DISCORD_GUILD_ID` - optional guild scope
+- `DISCORD_VOICE_CHANNEL_ID` - default voice channel target (`1493512967776637092`)
 - `OPENCLAW_BASE_URL` - OpenClaw endpoint
 - `OPENCLAW_API_KEY` - OpenClaw auth key
 
