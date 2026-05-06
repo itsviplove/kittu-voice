@@ -1,6 +1,6 @@
 import { unlink } from 'node:fs/promises';
 
-import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
+import { Client, Events, GatewayIntentBits, Partials, ApplicationCommandOptionType } from 'discord.js';
 import {
   AudioPlayerStatus,
   NoSubscriberBehavior,
@@ -60,6 +60,48 @@ export function createDiscordBot({ config, logger, pipeline }) {
     return audioPlayer;
   }
 
+  async function resolveTargetVoiceChannel() {
+    if (!client?.isReady?.()) return null;
+    if (!config.discordVoiceChannelId) return null;
+    return client.channels.fetch(config.discordVoiceChannelId);
+  }
+
+  async function registerSlashCommands(readyClient) {
+    const channel = await resolveTargetVoiceChannel();
+    const guildId = config.discordGuildId || channel?.guildId || channel?.guild?.id;
+    if (!guildId) {
+      logger.warn('Cannot register slash commands; guild ID is unknown');
+      return { ok: false, reason: 'guild-id-missing' };
+    }
+
+    const guild = await readyClient.guilds.fetch(guildId);
+    const commands = [
+      { name: 'join', description: 'Join the configured Kittu Voice channel' },
+      { name: 'leave', description: 'Leave the Kittu Voice channel' },
+      {
+        name: 'say',
+        description: 'Speak text in the configured voice channel',
+        options: [
+          {
+            name: 'text',
+            description: 'Text for Kittu to speak',
+            type: ApplicationCommandOptionType.String,
+            required: true,
+          },
+        ],
+      },
+      { name: 'status', description: 'Show Kittu Voice status' },
+      { name: 'help', description: 'Show Kittu Voice commands' },
+    ];
+
+    await guild.commands.set(commands);
+    logger.info('Registered Discord slash commands', {
+      guildId,
+      commands: commands.map((command) => command.name),
+    });
+    return { ok: true, guildId };
+  }
+
   async function joinConfiguredVoiceChannel({ speakWelcome = false } = {}) {
     if (!client?.isReady?.()) {
       return { ok: false, reason: 'Discord client not ready yet' };
@@ -70,7 +112,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
       return { ok: false, reason: 'No voice channel ID configured' };
     }
 
-    const channel = await client.channels.fetch(channelId);
+    const channel = await resolveTargetVoiceChannel();
     if (!channel?.isVoiceBased?.()) {
       return { ok: false, reason: `Channel ${channelId} is not a voice channel` };
     }
@@ -238,6 +280,14 @@ export function createDiscordBot({ config, logger, pipeline }) {
       });
 
       try {
+        await registerSlashCommands(readyClient);
+      } catch (error) {
+        logger.error('Discord slash command registration failed', {
+          message: error.message,
+        });
+      }
+
+      try {
         if (autoJoinVoice && config.discordVoiceChannelId) {
           await joinConfiguredVoiceChannel({ speakWelcome: true });
         }
@@ -247,6 +297,34 @@ export function createDiscordBot({ config, logger, pipeline }) {
         });
       } finally {
         startupGateResolve?.();
+      }
+    });
+
+    client.on(Events.InteractionCreate, async (interaction) => {
+      try {
+        if (!interaction.isChatInputCommand()) return;
+
+        await interaction.deferReply({ ephemeral: true });
+        let text = `/${interaction.commandName}`;
+        if (interaction.commandName === 'say') {
+          text = `/say ${interaction.options.getString('text', true)}`;
+        }
+
+        const result = await handleTextCommand(text, { voice: 'default' });
+        await interaction.editReply(result.message || 'Done.');
+      } catch (error) {
+        logger.error('Discord slash command failed', {
+          message: error.message,
+        });
+        try {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply('Kittu Voice command failed. Check bot logs.');
+          } else {
+            await interaction.reply({ content: 'Kittu Voice command failed. Check bot logs.', ephemeral: true });
+          }
+        } catch {
+          // ignore response failures
+        }
       }
     });
 
