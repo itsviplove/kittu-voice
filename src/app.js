@@ -21,8 +21,8 @@ export function createApp({ logger }) {
         openClawConfigured: openClaw.isConfigured(),
       });
 
-      await discordBot.start();
       await statusServer.start();
+      await discordBot.start();
     },
     async smokeTest() {
       const transcript = await pipeline.transcribe({ type: 'buffer', data: Buffer.from('test') });
