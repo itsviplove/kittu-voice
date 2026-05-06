@@ -235,6 +235,9 @@ export function createDiscordBot({ config, logger, pipeline }) {
       return {
         ...result,
         joined,
+        message: joined.ok
+          ? `Joined voice channel ${joined.channelName || joined.channelId}.`
+          : `Could not join voice channel: ${joined.reason}`,
       };
     }
 
@@ -243,6 +246,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
       return {
         ...result,
         left,
+        message: left.message || 'Left voice channel.',
       };
     }
 
@@ -252,6 +256,9 @@ export function createDiscordBot({ config, logger, pipeline }) {
       return {
         ...result,
         playback,
+        message: playback.playbackSkipped
+          ? `Generated audio, but playback was skipped: ${playback.reason}`
+          : `Spoke in voice channel: ${spoken}`,
       };
     }
 
