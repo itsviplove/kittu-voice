@@ -27,11 +27,15 @@ export function createApp({ logger }) {
       const transcript = await pipeline.transcribe({ type: 'buffer', data: Buffer.from('test') });
       const reply = await pipeline.generateReply({ text: transcript.text, userId: 'smoke-user' });
       const audio = await pipeline.synthesize({ text: reply.text, voice: 'default' });
+      const commandStatus = await discordBot.simulateCommand('/status');
+      const commandSay = await discordBot.simulateCommand('/say hello Kittu');
 
       return {
         transcript,
         reply,
         audio,
+        commandStatus,
+        commandSay,
         discordConfigured: discordBot.isConfigured(),
         openClawConfigured: openClaw.isConfigured(),
       };
