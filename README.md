@@ -20,6 +20,7 @@ This repo is a scaffold. It currently includes:
 - CLI entrypoint
 - HTTP status server
 - Config loader
+- Discord command router scaffold (`/join`, `/leave`, `/say`, `/status`, `/help`)
 - Stub Discord bot adapter
 - Stub OpenClaw client
 - Placeholder STT / reply / TTS pipeline
