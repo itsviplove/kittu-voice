@@ -40,7 +40,7 @@ This repo is a scaffold. It currently includes:
 
 ## Limitations
 
-- Real Discord voice capture/receive is scaffolded; STT uses a Whisper CLI if configured, otherwise falls back safely
+- Real Discord voice capture/receive is scaffolded; STT uses the bundled Whisper.cpp base model by default and falls back safely when decoding fails
 - TTS is still basic and meant for testing, not production
 - No queueing, session memory, or conversation state yet
 - No production auth/retry logic yet
