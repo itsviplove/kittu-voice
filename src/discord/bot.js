@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { unlink } from 'node:fs/promises';
 
 import { Client, Events, GatewayIntentBits, Partials, ApplicationCommandOptionType } from 'discord.js';
@@ -14,26 +15,40 @@ import {
 } from '@discordjs/voice';
 
 import { createDiscordCommandRouter } from './commands.js';
-import { createConversationMemory } from '../pipeline/conversationMemory.js';
 import { createVoiceCaptureManager } from '../pipeline/voiceCapture.js';
+
+const NON_SPEECH_PATTERNS = [
+  /^\[(?:BLANK_AUDIO|MUSIC|MUSICAL|APPLAUSE|GUNSHOT|GUNSHOTS)\]$/i,
+  /^\((?:fire crackling)\)$/i,
+  /^transcribed placeholder speech$/i,
+];
 
 function isCommandText(text, prefix = '!') {
   const value = String(text || '').trim();
   return value.startsWith(prefix) || value.startsWith('/');
 }
 
-export function createDiscordBot({ config, logger, pipeline }) {
+export function createDiscordBot({ config, logger, pipeline, conversationMemory }) {
   const router = createDiscordCommandRouter({ config, logger, pipeline });
-  const conversationMemory = createConversationMemory({ logger });
   const voiceCapture = createVoiceCaptureManager({
     logger,
+    onSpeechStart: async () => {
+      if (audioPlayer && audioPlayer.state?.status === AudioPlayerStatus.Playing) {
+        audioPlayer.stop(true);
+        logger.info('Interrupted assistant speech due to new user speech');
+      }
+    },
     onCapture: async (capture) => {
       if (!config.discordVoiceAutoRespond) return;
       try {
         const transcript = await pipeline.transcribeCapture(capture);
-        const turn = {
+        const scope = {
           guildId: capture.guildId || config.discordGuildId || 'global',
           channelId: capture.channelId || config.discordVoiceChannelId || 'default',
+        };
+        const turn = {
+          guildId: scope.guildId,
+          channelId: scope.channelId,
           userId: capture.userId,
           speaker: 'user',
           text: transcript.text,
@@ -42,11 +57,22 @@ export function createDiscordBot({ config, logger, pipeline }) {
           meta: { reason: capture.reason, durationMs: capture.durationMs },
         };
 
-        const recentTurns = await conversationMemory.readRecent({ guildId: turn.guildId, channelId: turn.channelId }, 8);
-        const summary = await conversationMemory.buildSummary({ guildId: turn.guildId, channelId: turn.channelId }, 8);
+        const recentTurns = await conversationMemory.readRecent(scope, 8);
+        const summary = await conversationMemory.buildSummary(scope, 8);
+        const userSummary = await conversationMemory.buildUserSummary(scope, capture.userId, 8);
         const shouldReply = shouldRespondToTranscript(transcript.text);
+        const addressedText = normalizeAddressedTranscript(transcript.text);
+        const ignoredTranscript = shouldIgnoreTranscript(transcript.text);
 
         await conversationMemory.appendTurn(turn);
+
+        if (ignoredTranscript) {
+          logger.info('Ignored non-speech voice transcript', {
+            userId: capture.userId,
+            transcript: transcript.text,
+          });
+          return;
+        }
 
         if (!shouldReply) {
           logger.info('Captured voice turn stored without reply', {
@@ -56,13 +82,17 @@ export function createDiscordBot({ config, logger, pipeline }) {
           return;
         }
 
-        const reply = await pipeline.generateReply({ text: transcript.text, userId: capture.userId, history: recentTurns, summary });
+        if (ackEnabled && ackText) {
+          await speakInVoice(ackText, 'thinking');
+        }
+
+        const reply = await pipeline.generateReply({ text: addressedText, userId: capture.userId, history: recentTurns, summary, userSummary });
         if (reply?.text) {
           await speakInVoice(reply.text, 'default');
         }
         await conversationMemory.appendTurn({
-          guildId: turn.guildId,
-          channelId: turn.channelId,
+          guildId: scope.guildId,
+          channelId: scope.channelId,
           userId: 'kittu',
           speaker: 'assistant',
           text: reply?.text || '',
@@ -87,11 +117,14 @@ export function createDiscordBot({ config, logger, pipeline }) {
   const autoJoinVoice = config.discordVoiceAutoJoin !== false;
   const welcomeText = config.discordVoiceWelcomeText || 'Kittu Voice is online.';
   const wakePhrase = String(config.discordVoiceWakePhrase || 'kittu').toLowerCase();
+  const ackEnabled = config.discordVoiceAckEnabled !== false;
+  const ackText = config.discordVoiceAckText || 'Hmm...';
   const respondToAll = config.discordVoiceRespondToAll === true;
 
   let client = null;
   let audioPlayer = null;
   let voiceConnection = null;
+  let voiceStateHandler = null;
   let startupGateResolve;
   const startupGate = new Promise((resolve) => {
     startupGateResolve = resolve;
@@ -102,7 +135,7 @@ export function createDiscordBot({ config, logger, pipeline }) {
 
     audioPlayer = createAudioPlayer({
       behaviors: {
-        noSubscriber: NoSubscriberBehavior.Pause,
+        noSubscriber: NoSubscriberBehavior.Play,
       },
     });
 
@@ -207,6 +240,27 @@ export function createDiscordBot({ config, logger, pipeline }) {
     });
     voiceConnection.subscribe(audioPlayer);
 
+    if (voiceStateHandler) {
+      voiceConnection.off?.('stateChange', voiceStateHandler);
+    }
+    voiceStateHandler = async (oldState, newState) => {
+      if (newState.status === VoiceConnectionStatus.Disconnected || newState.status === VoiceConnectionStatus.Destroyed) {
+        logger.warn('Discord voice connection dropped', {
+          oldStatus: oldState?.status || null,
+          newStatus: newState?.status || null,
+        });
+        if (autoJoinVoice && newState.status !== VoiceConnectionStatus.Destroyed) {
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            await joinConfiguredVoiceChannel({ speakWelcome: false });
+          } catch (error) {
+            logger.error('Voice reconnect failed', { message: error.message });
+          }
+        }
+      }
+    };
+    voiceConnection.on('stateChange', voiceStateHandler);
+
     await entersState(voiceConnection, VoiceConnectionStatus.Ready, 20_000);
     await voiceCapture.start(voiceConnection, {
       minDurationMs: config.discordVoiceMinTurnMs,
@@ -226,19 +280,60 @@ export function createDiscordBot({ config, logger, pipeline }) {
     return { ok: true, channelId, guildId, channelName: channel.name || null };
   }
 
-  function shouldRespondToTranscript(text) {
-    if (respondToAll) return true;
-    const normalized = String(text || '').toLowerCase();
+  function shouldIgnoreTranscript(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized) return true;
+    return NON_SPEECH_PATTERNS.some((pattern) => pattern.test(normalized));
+  }
+
+  function looksAddressedToKittu(text) {
+    const normalized = String(text || '').toLowerCase().trim();
     if (!normalized) return false;
     if (normalized.includes(wakePhrase)) return true;
-    if (/\?$/.test(normalized.trim())) return true;
-    if (/^(hey|hi|hello)\b/i.test(normalized)) return true;
+    if (/^<@!?\d+>/.test(normalized)) return true;
+    // Whisper often hears "Kittu" as "K2", "key two", "kitty", or "Ito".
+    if (/^(@?kittu|kitty|kito|k2|key\s*two|ito)\b/i.test(normalized)) return true;
     return false;
+  }
+
+  function isLikelyQuestionOrRequest(text) {
+    const normalized = String(text || '').toLowerCase().trim();
+    if (!normalized) return false;
+    if (normalized.endsWith('?')) return true;
+    if (/\b(what time is it|time now|tell me the time|how are you)\b/i.test(normalized)) return true;
+    if (/^(what|why|when|where|who|whose|which|how|can|could|would|will|should|do|does|did|is|are|am|was|were|tell|explain|search|find|open|make|create|play|stop|start)\b/i.test(normalized)) return true;
+    return false;
+  }
+
+  function shouldRespondToTranscript(text) {
+    if (shouldIgnoreTranscript(text)) return false;
+    if (respondToAll) return true;
+    return looksAddressedToKittu(text) || isLikelyQuestionOrRequest(text);
+  }
+
+  function normalizeAddressedTranscript(text) {
+    let normalized = String(text || '').trim();
+    if (!normalized) return normalized;
+
+    const wakePattern = new RegExp(`^(${escapeRegex(wakePhrase)}|<@!?\\d+>|@?kittu|kitty|kito|k2|key\\s*two|ito)[,\\s:.-]*`, 'i');
+    normalized = normalized.replace(wakePattern, '').trim();
+    if (normalized.toLowerCase().startsWith('hey ' + wakePhrase)) {
+      normalized = normalized.slice(('hey ' + wakePhrase).length).trim();
+    }
+    return normalized || String(text || '').trim();
+  }
+
+  function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   async function leaveVoiceChannel() {
     if (voiceConnection) {
       await voiceCapture.stop();
+      if (voiceStateHandler) {
+        voiceConnection.off?.('stateChange', voiceStateHandler);
+        voiceStateHandler = null;
+      }
       voiceConnection.destroy();
       voiceConnection = null;
       return { ok: true, message: 'Disconnected from voice channel.' };
@@ -293,13 +388,29 @@ export function createDiscordBot({ config, logger, pipeline }) {
         }
       };
 
-      audioPlayer.once(AudioPlayerStatus.Idle, async () => {
+      const finish = async (result) => {
+        audioPlayer.off(AudioPlayerStatus.Idle, onIdle);
+        audioPlayer.off('error', onError);
         await cleanup();
-        resolve({ ok: true, audio });
-      });
-      audioPlayer.once('error', async (error) => {
+        resolve(result);
+      };
+      const onIdle = async () => {
+        await finish({ ok: true, audio });
+      };
+      const onError = async (error) => {
+        audioPlayer.off(AudioPlayerStatus.Idle, onIdle);
         await cleanup();
         reject(error);
+      };
+
+      audioPlayer.once(AudioPlayerStatus.Idle, onIdle);
+      audioPlayer.once('error', onError);
+
+      delay(12_000).then(() => {
+        if (audioPlayer.state?.status !== AudioPlayerStatus.Idle) {
+          audioPlayer.stop(true);
+          void finish({ ok: true, audio, timedOut: true });
+        }
       });
     });
 
@@ -395,12 +506,17 @@ export function createDiscordBot({ config, logger, pipeline }) {
       try {
         if (!interaction.isChatInputCommand()) return;
 
-        await interaction.deferReply({ ephemeral: true });
         let text = `/${interaction.commandName}`;
         if (interaction.commandName === 'say') {
-          text = `/say ${interaction.options.getString('text', true)}`;
+          const spokenText = interaction.options.getString('text', true);
+          await interaction.reply({ content: `Speaking: ${spokenText}`, ephemeral: true });
+          void handleTextCommand(`/say ${spokenText}`, { voice: 'default' }).catch((error) => {
+            logger.error('Discord async say command failed', { message: error.message });
+          });
+          return;
         }
 
+        await interaction.deferReply({ ephemeral: true });
         const result = await handleTextCommand(text, { voice: 'default' });
         await interaction.editReply(result.message || 'Done.');
       } catch (error) {

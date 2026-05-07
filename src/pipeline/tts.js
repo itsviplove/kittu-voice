@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_WINDOWS_VOICE = 'Microsoft Zira Desktop';
 
 function sanitize(input) {
   return String(input || 'voice')
@@ -51,38 +52,77 @@ async function writeFallbackWave(filePath, text) {
   await writeFile(filePath, tone);
 }
 
-async function writeWindowsSpeechWave(filePath, text) {
+function resolveVoiceName(configVoice, requestedVoice) {
+  if (requestedVoice && requestedVoice !== 'default' && requestedVoice !== 'thinking' && requestedVoice !== 'welcome') {
+    return requestedVoice;
+  }
+  return process.env.TTS_VOICE || process.env.DISCORD_TTS_VOICE || configVoice || DEFAULT_WINDOWS_VOICE;
+}
+
+async function writeWindowsSpeechWave(filePath, text, voiceName) {
   const script = [
     'Add-Type -AssemblyName System.Speech',
     '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+    '$voiceName = ' + JSON.stringify(voiceName),
+    'if ($voiceName) { try { $synth.SelectVoice($voiceName) } catch { } }',
     `$synth.SetOutputToWaveFile(${JSON.stringify(filePath)})`,
     `$synth.Speak(${JSON.stringify(text)})`,
     '$synth.Dispose()',
   ].join('; ');
-  await execFileAsync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+  await execFileAsync('powershell', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script]);
 }
 
-export function createTextToSpeech({ logger }) {
+async function writeWindowsComSpeechWave(filePath, text) {
+  const script = [
+    '$voice = New-Object -ComObject SAPI.SpVoice',
+    `$stream = New-Object -ComObject SAPI.SpFileStream`,
+    `$stream.Open(${JSON.stringify(filePath)}, 3, $false)`,
+    '$voice.AudioOutputStream = $stream',
+    `$voice.Speak(${JSON.stringify(text)})`,
+    '$stream.Close()',
+  ].join('; ');
+  await execFileAsync('powershell', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+}
+
+export function createTextToSpeech({ config = {}, logger }) {
+  const configuredVoice = config.discordTtsVoice || config.ttsVoice || DEFAULT_WINDOWS_VOICE;
+
   return {
     async synthesize({ text, voice }) {
       const outDir = path.join(os.tmpdir(), 'kittu-voice');
       await mkdir(outDir, { recursive: true });
-      const filePath = path.join(outDir, `kittu-${Date.now()}-${sanitize(voice)}.wav`);
+      const selectedVoice = resolveVoiceName(configuredVoice, voice);
+      const filePath = path.join(outDir, `kittu-${Date.now()}-${sanitize(selectedVoice)}.wav`);
 
       logger.debug('TTS synthesize invoked', {
         voice,
+        selectedVoice,
         textLength: text.length,
         filePath,
       });
 
       try {
         if (process.platform === 'win32') {
-          await writeWindowsSpeechWave(filePath, text);
-          return {
-            format: 'wav',
-            path: filePath,
-            engine: 'windows-sapi',
-          };
+          try {
+            await writeWindowsSpeechWave(filePath, text, selectedVoice);
+            return {
+              format: 'wav',
+              path: filePath,
+              engine: 'windows-sapi',
+              voice: selectedVoice,
+            };
+          } catch (speechError) {
+            logger.warn('System.Speech synthesis failed; trying SAPI COM fallback', {
+              message: speechError.message,
+            });
+            await writeWindowsComSpeechWave(filePath, text);
+            return {
+              format: 'wav',
+              path: filePath,
+              engine: 'windows-sapi-com',
+              voice: selectedVoice,
+            };
+          }
         }
       } catch (error) {
         logger.warn('Windows speech synthesis failed; falling back to tone', {
@@ -95,6 +135,7 @@ export function createTextToSpeech({ logger }) {
         format: 'wav',
         path: filePath,
         engine: 'tone-fallback',
+        voice: selectedVoice,
       };
     },
   };

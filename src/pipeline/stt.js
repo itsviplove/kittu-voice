@@ -1,6 +1,7 @@
 import { access, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 import ffmpegStatic from 'ffmpeg-static';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +10,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const workspaceRoot = path.resolve(projectRoot, '..');
 const whisperToolRoot = path.join(workspaceRoot, 'tools', 'whispercpp');
 const whisperDefaultBin = path.join(whisperToolRoot, 'bin', 'Release', 'whisper-cli.exe');
-const whisperDefaultModel = path.join(whisperToolRoot, 'models', 'ggml-base.bin');
+const whisperModelsRoot = path.join(whisperToolRoot, 'models');
+const whisperDefaultModel = path.join(whisperModelsRoot, 'ggml-base.bin');
 
 function runCommand(command, args, { logger } = {}) {
   return new Promise((resolve, reject) => {
@@ -39,7 +41,39 @@ function runCommand(command, args, { logger } = {}) {
   });
 }
 
-async function ensureWavFromOpus(inputPath, logger) {
+function looksLikePath(value = '') {
+  return /[\\/]/.test(value) || /\.bin$/i.test(value) || /^[A-Za-z]:/.test(value);
+}
+
+function resolveWhisperModelPath() {
+  const configured = process.env.WHISPER_MODEL || '';
+  if (!configured) {
+    return whisperDefaultModel;
+  }
+
+  if (looksLikePath(configured)) {
+    return configured;
+  }
+
+  const normalized = configured.replace(/^ggml-/, '').replace(/\.bin$/i, '').trim().toLowerCase();
+  const candidate = path.join(whisperModelsRoot, `ggml-${normalized}.bin`);
+  if (existsSync(candidate)) {
+    return candidate;
+  }
+
+  return whisperDefaultModel;
+}
+
+async function ensureWavFromInput(input, logger) {
+  const inputPath = input.path;
+  if (!inputPath) {
+    throw new Error('No audio path available for STT');
+  }
+
+  if (/\.wav$/i.test(inputPath) || input.format === 'wav') {
+    return { wavPath: inputPath, cleanup: false };
+  }
+
   const wavPath = `${inputPath}.wav`;
   const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic;
 
@@ -47,13 +81,17 @@ async function ensureWavFromOpus(inputPath, logger) {
     throw new Error('ffmpeg binary not available');
   }
 
-  await runCommand(ffmpegPath, ['-y', '-i', inputPath, '-ac', '1', '-ar', '16000', wavPath], { logger });
-  return wavPath;
+  const args = input.format === 'pcm-s16le'
+    ? ['-y', '-f', 's16le', '-ar', String(input.sampleRate || 48000), '-ac', String(input.channels || 2), '-i', inputPath, wavPath]
+    : ['-y', '-i', inputPath, '-ac', '1', '-ar', '16000', wavPath];
+
+  await runCommand(ffmpegPath, args, { logger });
+  return { wavPath, cleanup: true };
 }
 
 async function runWhisperCli(wavPath, logger) {
   const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI || whisperDefaultBin;
-  const whisperModel = process.env.WHISPER_MODEL || whisperDefaultModel;
+  const whisperModel = resolveWhisperModelPath();
   try {
     await access(whisperBin);
   } catch {
@@ -86,21 +124,24 @@ async function runWhisperCli(wavPath, logger) {
 
 async function normalizeInput(input) {
   if (typeof input === 'string') {
-    return { path: input, cleanup: false };
+    return { path: input, cleanup: false, format: input.toLowerCase().endsWith('.wav') ? 'wav' : undefined };
   }
 
-  if (input?.path) {
-    return { path: input.path, cleanup: false };
-  }
-
-  if (input?.filePath) {
-    return { path: input.filePath, cleanup: false };
+  if (input?.path || input?.filePath) {
+    const filePath = input.path || input.filePath;
+    return {
+      path: filePath,
+      cleanup: false,
+      format: input.format || (String(filePath).toLowerCase().endsWith('.wav') ? 'wav' : undefined),
+      sampleRate: input.sampleRate,
+      channels: input.channels,
+    };
   }
 
   if (input?.type === 'buffer' && input.data) {
     const tempPath = path.join(process.cwd(), '.kittu-voice-stt-input.opus');
     await writeFile(tempPath, input.data);
-    return { path: tempPath, cleanup: true };
+    return { path: tempPath, cleanup: true, format: 'opus' };
   }
 
   throw new Error('Unsupported STT input');
@@ -112,18 +153,19 @@ export function createSpeechToText({ logger }) {
       logger.debug('STT invoked', {
         inputType: input?.type || 'unknown',
         inputPath: input?.path || input?.filePath || null,
+        inputFormat: input?.format || null,
       });
 
       const capture = await normalizeInput(input);
-      let wavPath = null;
+      let wav = null;
 
       try {
-        wavPath = await ensureWavFromOpus(capture.path, logger);
-        const transcript = await runWhisperCli(wavPath, logger);
+        wav = await ensureWavFromInput(capture, logger);
+        const transcript = await runWhisperCli(wav.wavPath, logger);
         return {
           ...transcript,
           sourcePath: capture.path,
-          wavPath,
+          wavPath: wav.wavPath,
         };
       } catch (error) {
         logger.warn('Whisper transcription fallback used', {
@@ -134,11 +176,13 @@ export function createSpeechToText({ logger }) {
           model: 'stub-stt',
           source: 'fallback',
           sourcePath: capture.path,
-          wavPath,
+          wavPath: wav?.wavPath || null,
         };
       } finally {
         try {
-          await unlink(wavPath);
+          if (wav?.cleanup && wav?.wavPath) {
+            await unlink(wav.wavPath);
+          }
         } catch {
           // ignore cleanup
         }

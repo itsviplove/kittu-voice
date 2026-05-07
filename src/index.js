@@ -1,7 +1,10 @@
 #!/usr/bin/env node
+import path from 'node:path';
+
 import { createApp } from './app.js';
 import { createLogger } from './util/logger.js';
 
+loadProjectEnv();
 const logger = createLogger(process.env.LOG_LEVEL || 'info');
 
 async function main() {
@@ -27,6 +30,15 @@ async function main() {
   logger.error(`Unknown command: ${command}`);
   printHelp();
   process.exitCode = 1;
+}
+
+function loadProjectEnv() {
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    process.loadEnvFile(envPath);
+  } catch {
+    // ignore missing or unreadable .env files
+  }
 }
 
 function printHelp() {

@@ -1,8 +1,14 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { EndBehaviorType } from '@discordjs/voice';
+
+const require = createRequire(import.meta.url);
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const prism = require(path.join(projectRoot, 'node_modules', '@discordjs', 'voice', 'node_modules', 'prism-media'));
 
 function safeStamp(value = new Date()) {
   return value.toISOString().replace(/[:.]/g, '-');
@@ -12,7 +18,7 @@ function safeName(value = '') {
   return String(value).replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
+export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeechStart } = {}) {
   const captureRoot = rootDir || path.join(process.cwd(), '.kittu-voice-captures');
   const active = new Map();
   const finalizing = new Set();
@@ -31,25 +37,64 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
     recentCaptures.length = Math.min(recentCaptures.length, 12);
   }
 
+  async function closeCaptureStreams(current) {
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      current.writeStream.once('close', finish);
+      current.writeStream.once('finish', finish);
+      current.writeStream.once('error', finish);
+
+      try {
+        current.stream.unpipe?.(current.decoder);
+      } catch {
+        // ignore unpipe errors
+      }
+
+      try {
+        current.stream.destroy();
+      } catch {
+        // ignore destroy errors
+      }
+
+      try {
+        current.decoder.end();
+      } catch {
+        // ignore decoder end errors
+      }
+
+      try {
+        current.writeStream.end();
+      } catch {
+        finish();
+      }
+    });
+  }
+
   async function finalizeCapture(userId, reason = 'ended') {
     if (finalizing.has(userId)) return null;
     const current = active.get(userId);
     if (!current) return null;
 
     finalizing.add(userId);
-
     active.delete(userId);
+
     current.endedAt = new Date().toISOString();
     current.durationMs = new Date(current.endedAt).getTime() - new Date(current.startedAt).getTime();
 
+    try {
+      await closeCaptureStreams(current);
+    } catch {
+      // ignore close errors and continue cleanup
+    }
+
     if (Number.isFinite(current.durationMs) && current.durationMs < (current.minDurationMs || 0)) {
       finalizing.delete(userId);
-      try {
-        current.stream.destroy();
-        current.writeStream.end();
-      } catch {
-        // ignore cleanup
-      }
       try {
         await writeStreamCleanup(current.filePath);
       } catch {
@@ -62,12 +107,6 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       });
       return null;
     }
-
-    await new Promise((resolve) => {
-      current.stream.once('close', resolve);
-      current.stream.destroy();
-      current.writeStream.end();
-    });
 
     const capture = { ...current, reason };
     try {
@@ -84,6 +123,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       durationMs: capture.durationMs,
       bytes: capture.bytes,
       reason,
+      format: capture.format,
     });
     if (onCapture) {
       void onCapture(capture);
@@ -107,7 +147,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
 
     await ensureRoot();
     const startedAt = new Date();
-    const fileName = `${safeStamp(startedAt)}-${safeName(userId)}.opus`;
+    const fileName = `${safeStamp(startedAt)}-${safeName(userId)}.pcm`;
     const filePath = path.join(captureRoot, fileName);
 
     const stream = connection.receiver.subscribe(userId, {
@@ -116,7 +156,14 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
         duration: options.endSilenceMs || 900,
       },
     });
+    const decoder = new prism.opus.Decoder({
+      rate: 48000,
+      channels: 2,
+      frameSize: 960,
+    });
     const writeStream = createWriteStream(filePath);
+
+    stream.pipe(decoder).pipe(writeStream);
 
     const current = {
       userId,
@@ -125,23 +172,18 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       durationMs: null,
       minDurationMs: options.minDurationMs || 0,
       filePath,
-      format: 'opus',
+      format: 'pcm-s16le',
+      sampleRate: 48000,
+      channels: 2,
+      bitDepth: 16,
       stream,
+      decoder,
       writeStream,
     };
 
     active.set(userId, current);
 
-    stream.on('data', (chunk) => {
-      if (!writeStream.destroyed) {
-        writeStream.write(chunk);
-      }
-    });
-
     stream.once('end', async () => {
-      if (!writeStream.destroyed) {
-        writeStream.end();
-      }
       await finalizeCapture(userId, 'silence');
     });
 
@@ -153,6 +195,14 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       await finalizeCapture(userId, 'error');
     });
 
+    decoder.once('error', async (error) => {
+      logger?.error?.('Discord voice capture decode error', {
+        userId,
+        message: error.message,
+      });
+      await finalizeCapture(userId, 'decode-error');
+    });
+
     writeStream.once('error', (error) => {
       logger?.error?.('Discord voice capture write error', {
         userId,
@@ -160,7 +210,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       });
     });
 
-    logger?.info?.('Started Discord voice capture', { userId, filePath });
+    logger?.info?.('Started Discord voice capture', { userId, filePath, format: current.format });
     return current;
   }
 
@@ -188,10 +238,13 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture } = {}) {
       }
 
       speakingStartHandler = (userId) => {
+        if (onSpeechStart) {
+          void onSpeechStart(userId);
+        }
         void startStreamForUser(userId, options);
       };
       speakingEndHandler = (userId) => {
-        void finalizeCapture(userId, 'speaking-end');
+        logger?.debug?.('Discord speaking end observed; waiting for receiver silence', { userId });
       };
 
       connection.receiver.speaking.on('start', speakingStartHandler);

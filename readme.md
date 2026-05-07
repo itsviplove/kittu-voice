@@ -40,9 +40,9 @@ This repo is a scaffold. It currently includes:
 
 ## Limitations
 
-- Real Discord voice capture/receive is scaffolded; STT uses the bundled Whisper.cpp base model by default and falls back safely when decoding fails
+- Real Discord voice capture/receive is scaffolded; STT uses the bundled Whisper.cpp model path resolution and falls back safely when decoding fails
 - TTS is still basic and meant for testing, not production
-- No queueing, session memory, or conversation state yet
+- Conversation memory/history exists, but the runtime still needs more live validation and hardening
 - No production auth/retry logic yet
 - Performance target is realistic, not guaranteed
 
@@ -75,17 +75,21 @@ npm start
 - `PORT` - status server port, default `8787`
 - `LOG_LEVEL` - `debug`, `info`, `warn`, `error`
 - `DISCORD_TOKEN` - Discord bot token
+- `DISCORD` - supported alias for the Discord bot token
 - `DISCORD_GUILD_ID` - optional guild scope
 - `DISCORD_VOICE_CHANNEL_ID` - default voice channel target (`1493512967776637092`)
 - `DISCORD_VOICE_AUTO_JOIN` - auto-join the configured voice channel on startup (`true`/`false`)
 - `DISCORD_VOICE_AUTO_RESPOND` - auto-transcribe/reply after a captured utterance (`true`/`false`)
 - `DISCORD_VOICE_RESPOND_TO_ALL` - default `true`; set `false` to require the wake phrase
 - `DISCORD_VOICE_WAKE_PHRASE` - wake phrase for targeted replies, default `kittu`
+- `DISCORD_VOICE_ACK_ENABLED` - speak a short acknowledgement before processing, default `true`
+- `DISCORD_VOICE_ACK_TEXT` - acknowledgement phrase, default `Hmm...`
+- `DISCORD_TTS_VOICE` - Windows TTS voice name, default `Microsoft Zira Desktop`
 - `DISCORD_VOICE_MIN_TURN_MS` - ignore very short captured turns, default `400`
 - `DISCORD_VOICE_END_SILENCE_MS` - silence window before ending a turn, default `900`
 - `FFMPEG_PATH` - optional path to an ffmpeg binary
 - `WHISPER_BIN` - optional Whisper CLI / whisper.cpp binary path
-- `WHISPER_MODEL` - Whisper model name for the CLI, default `tiny`
+- `WHISPER_MODEL` - Whisper model name or model path; simple names like `base` resolve to the bundled whisper.cpp model
 - `WHISPER_LANGUAGE` - Whisper language hint, default `en`
 - `WHISPER_OUTPUT_DIR` - optional transcript output directory
 - `.kittu-voice-history/` - local JSONL transcript history by guild/channel
