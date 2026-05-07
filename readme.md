@@ -85,6 +85,10 @@ npm start
 - `DISCORD_VOICE_ACK_ENABLED` - speak a short acknowledgement before processing, default `true`
 - `DISCORD_VOICE_ACK_TEXT` - acknowledgement phrase, default `Hmm...`
 - `DISCORD_TTS_VOICE` - Windows TTS voice name, default `Microsoft Zira Desktop`
+- `OPENCLAW_BASE_URL` - Gateway HTTP URL, default auto-detected from local OpenClaw config
+- `OPENCLAW_GATEWAY_TOKEN` - Gateway auth token
+- `OPENCLAW_MODEL` - model/agent alias, default `openclaw/default`
+- `OPENCLAW_REQUEST_TIMEOUT_MS` - Gateway request timeout, default `30000`
 - `DISCORD_VOICE_MIN_TURN_MS` - ignore very short captured turns, default `400`
 - `DISCORD_VOICE_END_SILENCE_MS` - silence window before ending a turn, default `900`
 - `FFMPEG_PATH` - optional path to an ffmpeg binary
