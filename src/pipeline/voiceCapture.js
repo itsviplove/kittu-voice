@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat, unlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +21,7 @@ function safeName(value = '') {
 export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeechStart } = {}) {
   const captureRoot = rootDir || path.join(process.cwd(), '.kittu-voice-captures');
   const active = new Map();
-  const finalizing = new Set();
+  const finalizing = new Map();
   const recentCaptures = [];
   let connection = null;
   let speakingStartHandler = null;
@@ -43,8 +43,10 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
       const finish = () => {
         if (settled) return;
         settled = true;
+        clearTimeout(timeoutId);
         resolve();
       };
+      const timeoutId = setTimeout(finish, 1500);
 
       current.writeStream.once('close', finish);
       current.writeStream.once('finish', finish);
@@ -77,64 +79,74 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
   }
 
   async function finalizeCapture(userId, reason = 'ended') {
-    if (finalizing.has(userId)) return null;
+    if (finalizing.has(userId)) return finalizing.get(userId);
     const current = active.get(userId);
     if (!current) return null;
 
-    finalizing.add(userId);
-    active.delete(userId);
+    const finalizePromise = (async () => {
+      active.delete(userId);
 
-    current.endedAt = new Date().toISOString();
-    current.durationMs = new Date(current.endedAt).getTime() - new Date(current.startedAt).getTime();
+      current.endedAt = new Date().toISOString();
+      current.durationMs = new Date(current.endedAt).getTime() - new Date(current.startedAt).getTime();
 
-    try {
-      await closeCaptureStreams(current);
-    } catch {
-      // ignore close errors and continue cleanup
-    }
-
-    if (Number.isFinite(current.durationMs) && current.durationMs < (current.minDurationMs || 0)) {
-      finalizing.delete(userId);
       try {
-        await writeStreamCleanup(current.filePath);
+        await closeCaptureStreams(current);
       } catch {
-        // ignore cleanup
+        // ignore close errors and continue cleanup
       }
-      logger?.info?.('Skipped short Discord voice capture', {
-        userId,
-        durationMs: current.durationMs,
+
+      if (Number.isFinite(current.durationMs) && current.durationMs < (current.minDurationMs || 0)) {
+        try {
+          await writeStreamCleanup(current.filePath);
+        } catch {
+          // ignore cleanup
+        }
+        logger?.info?.('Skipped short Discord voice capture', {
+          userId,
+          durationMs: current.durationMs,
+          reason,
+        });
+        return null;
+      }
+
+      const capture = { ...current, reason };
+      try {
+        const info = await stat(capture.filePath);
+        capture.bytes = info.size;
+      } catch {
+        capture.bytes = null;
+      }
+
+      pushRecent(capture);
+      logger?.info?.('Saved Discord voice capture', {
+        userId: capture.userId,
+        filePath: capture.filePath,
+        durationMs: capture.durationMs,
+        bytes: capture.bytes,
         reason,
+        format: capture.format,
       });
-      return null;
-    }
+      if (onCapture) {
+        await Promise.resolve(onCapture(capture)).catch((error) => {
+          logger?.error?.('Discord voice capture callback failed', {
+            userId: capture.userId,
+            message: error.message,
+          });
+        });
+      }
+      return capture;
+    })();
 
-    const capture = { ...current, reason };
+    finalizing.set(userId, finalizePromise);
     try {
-      const info = await stat(capture.filePath);
-      capture.bytes = info.size;
-    } catch {
-      capture.bytes = null;
+      return await finalizePromise;
+    } finally {
+      finalizing.delete(userId);
     }
-
-    pushRecent(capture);
-    logger?.info?.('Saved Discord voice capture', {
-      userId: capture.userId,
-      filePath: capture.filePath,
-      durationMs: capture.durationMs,
-      bytes: capture.bytes,
-      reason,
-      format: capture.format,
-    });
-    if (onCapture) {
-      void onCapture(capture);
-    }
-    finalizing.delete(userId);
-    return capture;
   }
 
   async function writeStreamCleanup(filePath) {
     try {
-      const { unlink } = await import('node:fs/promises');
       await unlink(filePath);
     } catch {
       // ignore cleanup
@@ -172,6 +184,8 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
       durationMs: null,
       minDurationMs: options.minDurationMs || 0,
       filePath,
+      guildId: connection.joinConfig?.guildId || null,
+      channelId: connection.joinConfig?.channelId || null,
       format: 'pcm-s16le',
       sampleRate: 48000,
       channels: 2,
@@ -214,7 +228,7 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
     return current;
   }
 
-  function stopAll() {
+  async function stopAll() {
     for (const userId of [...active.keys()]) {
       void finalizeCapture(userId, 'stopped');
     }
@@ -227,11 +241,14 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
     connection = null;
     speakingStartHandler = null;
     speakingEndHandler = null;
+    if (finalizing.size) {
+      await Promise.allSettled([...finalizing.values()]);
+    }
   }
 
   return {
     async start(voiceConnection, options = {}) {
-      stopAll();
+      await stopAll();
       connection = voiceConnection;
       if (!connection?.receiver) {
         return { ok: false, reason: 'voice receiver unavailable' };
@@ -258,13 +275,14 @@ export function createVoiceCaptureManager({ logger, rootDir, onCapture, onSpeech
       return { ok: true, captureRoot };
     },
     async stop() {
-      stopAll();
+      await stopAll();
       return { ok: true };
     },
     getStatus() {
       return {
         captureRoot,
         activeCount: active.size,
+        finalizingCount: finalizing.size,
         recentCaptures: recentCaptures.slice(0, 5).map(({ userId, startedAt, endedAt, durationMs, filePath, format, bytes, reason }) => ({
           userId,
           startedAt,

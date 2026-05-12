@@ -28,6 +28,13 @@ function isCommandText(text, prefix = '!') {
   return value.startsWith(prefix) || value.startsWith('/');
 }
 
+export function canReuseVoiceConnection(existing, targetChannelId) {
+  const existingChannelId = existing?.joinConfig?.channelId || null;
+  const status = existing?.state?.status || null;
+  if (!existing || !existingChannelId || existingChannelId !== targetChannelId) return false;
+  return status !== VoiceConnectionStatus.Destroyed && status !== VoiceConnectionStatus.Disconnected;
+}
+
 export function createDiscordBot({ config, logger, pipeline, conversationMemory }) {
   const router = createDiscordCommandRouter({ config, logger, pipeline });
   const voiceCapture = createVoiceCaptureManager({
@@ -82,27 +89,29 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
           return;
         }
 
-        if (ackEnabled && ackText) {
+        const ackText = ackEnabled ? chooseAckText() : '';
+        if (ackText) {
           await speakInVoice(ackText, 'thinking');
         }
 
-        const reply = await pipeline.generateReply({ text: addressedText, userId: capture.userId, history: recentTurns, summary, userSummary });
-        if (reply?.text) {
-          await speakInVoice(reply.text, 'default');
+        const reply = await pipeline.generateReply({ text: addressedText, userId: capture.userId, history: recentTurns, summary, userSummary, scope });
+        const spokenReply = reply?.spokenText || reply?.text || '';
+        if (spokenReply) {
+          await speakInVoice(spokenReply, 'default');
         }
         await conversationMemory.appendTurn({
           guildId: scope.guildId,
           channelId: scope.channelId,
           userId: 'kittu',
           speaker: 'assistant',
-          text: reply?.text || '',
+          text: spokenReply,
           reply,
           meta: { source: reply?.source || null },
         });
         logger.info('Processed Discord voice capture', {
           userId: capture.userId,
           transcript: transcript.text,
-          reply: reply?.text || null,
+          reply: spokenReply || null,
           summaryTurns: summary.totalTurns,
         });
       } catch (error) {
@@ -118,17 +127,33 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
   const welcomeText = config.discordVoiceWelcomeText || 'Kittu Voice is online.';
   const wakePhrase = String(config.discordVoiceWakePhrase || 'kittu').toLowerCase();
   const ackEnabled = config.discordVoiceAckEnabled !== false;
-  const ackText = config.discordVoiceAckText || 'Hmm...';
+  const ackCooldownMs = Number.parseInt(String(config.discordVoiceAckCooldownMs || '12000'), 10) || 12000;
+  const ackPhrases = String(config.discordVoiceAckText || '').includes('|')
+    ? String(config.discordVoiceAckText).split('|').map((entry) => entry.trim()).filter(Boolean)
+    : [config.discordVoiceAckText || 'Hmm...', 'One sec.', 'Got it.'];
   const respondToAll = config.discordVoiceRespondToAll === true;
 
   let client = null;
   let audioPlayer = null;
   let voiceConnection = null;
   let voiceStateHandler = null;
+  let reconnectPromise = null;
+  let ackCursor = 0;
+  let lastAckAt = 0;
   let startupGateResolve;
   const startupGate = new Promise((resolve) => {
     startupGateResolve = resolve;
   });
+
+  function chooseAckText() {
+    if (!ackPhrases.length) return '';
+    const now = Date.now();
+    if (now - lastAckAt < ackCooldownMs) return '';
+    const ack = ackPhrases[ackCursor % ackPhrases.length] || '';
+    ackCursor += 1;
+    lastAckAt = now;
+    return ack;
+  }
 
   function ensureAudioPlayer() {
     if (audioPlayer) return audioPlayer;
@@ -220,8 +245,7 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
 
     const existing = getVoiceConnection(guildId);
     if (existing) {
-      const existingChannelId = existing.joinConfig?.channelId;
-      if (existingChannelId && existingChannelId !== channelId) {
+      if (!canReuseVoiceConnection(existing, channelId)) {
         existing.destroy();
       } else {
         voiceConnection = existing;
@@ -249,13 +273,22 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
           oldStatus: oldState?.status || null,
           newStatus: newState?.status || null,
         });
-        if (autoJoinVoice && newState.status !== VoiceConnectionStatus.Destroyed) {
-          try {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            await joinConfiguredVoiceChannel({ speakWelcome: false });
-          } catch (error) {
-            logger.error('Voice reconnect failed', { message: error.message });
-          }
+        if (newState.status === VoiceConnectionStatus.Destroyed) {
+          voiceConnection = null;
+          return;
+        }
+        if (autoJoinVoice) {
+          reconnectPromise ??= (async () => {
+            try {
+              await delay(1500);
+              voiceConnection = null;
+              await joinConfiguredVoiceChannel({ speakWelcome: false });
+            } catch (error) {
+              logger.error('Voice reconnect failed', { message: error.message });
+            } finally {
+              reconnectPromise = null;
+            }
+          })();
         }
       }
     };
@@ -336,6 +369,7 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
       }
       voiceConnection.destroy();
       voiceConnection = null;
+      reconnectPromise = null;
       return { ok: true, message: 'Disconnected from voice channel.' };
     }
 
@@ -380,7 +414,13 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
     });
 
     const playbackDone = new Promise((resolve, reject) => {
+      let finished = false;
+      let timeoutId = null;
+
       const cleanup = async () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         try {
           await unlink(audio.path);
         } catch {
@@ -389,6 +429,8 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
       };
 
       const finish = async (result) => {
+        if (finished) return;
+        finished = true;
         audioPlayer.off(AudioPlayerStatus.Idle, onIdle);
         audioPlayer.off('error', onError);
         await cleanup();
@@ -398,6 +440,8 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
         await finish({ ok: true, audio });
       };
       const onError = async (error) => {
+        if (finished) return;
+        finished = true;
         audioPlayer.off(AudioPlayerStatus.Idle, onIdle);
         await cleanup();
         reject(error);
@@ -406,14 +450,17 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
       audioPlayer.once(AudioPlayerStatus.Idle, onIdle);
       audioPlayer.once('error', onError);
 
-      delay(12_000).then(() => {
+      timeoutId = setTimeout(() => {
         if (audioPlayer.state?.status !== AudioPlayerStatus.Idle) {
           audioPlayer.stop(true);
           void finish({ ok: true, audio, timedOut: true });
         }
-      });
+      }, 12_000);
     });
 
+    if (audioPlayer.state?.status === AudioPlayerStatus.Playing) {
+      audioPlayer.stop(true);
+    }
     audioPlayer.play(resource);
     return playbackDone;
   }
@@ -577,9 +624,14 @@ export function createDiscordBot({ config, logger, pipeline, conversationMemory 
     async stop() {
       await voiceCapture.stop();
       if (voiceConnection) {
+        if (voiceStateHandler) {
+          voiceConnection.off?.('stateChange', voiceStateHandler);
+          voiceStateHandler = null;
+        }
         voiceConnection.destroy();
         voiceConnection = null;
       }
+      reconnectPromise = null;
       if (client) {
         await client.destroy();
         client = null;

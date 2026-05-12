@@ -16,7 +16,7 @@ Kittu Voice is a Discord voice assistant scaffold built for modest hardware, wit
 
 ## Current state
 
-This repo is a scaffold. It currently includes:
+This repo now includes:
 
 - CLI entrypoint
 - HTTP status server
@@ -26,9 +26,18 @@ This repo is a scaffold. It currently includes:
 - Discord voice join/playback path for the configured channel
 - Discord voice receive/capture path that saves Opus chunks per speaking turn
 - Optional auto-reply loop (`DISCORD_VOICE_AUTO_RESPOND=true`) that can transcribe, reply, and speak back
-- Stub OpenClaw client
-- Placeholder STT / reply / TTS pipeline
+- OpenClaw reply routing with configurable session/http fallback order
+- Fast local-first answers for simple voice prompts
+- Spoken-reply compaction so long model text gets shortened for voice
+- Less repetitive voice acknowledgements with cooldown support
 - Smoke-test path
+
+## Near-term plans
+
+- Keep realtime replies under a short latency cap so the bot responds instead of stalling.
+- Keep improving voice brevity, spoken naturalness, and interruption handling.
+- Add better conversation summarization for long sessions.
+- Add clearer runtime observability for slow/fallback turns.
 
 ## Intended stack
 
@@ -83,12 +92,22 @@ npm start
 - `DISCORD_VOICE_RESPOND_TO_ALL` - default `true`; set `false` to require the wake phrase
 - `DISCORD_VOICE_WAKE_PHRASE` - wake phrase for targeted replies, default `kittu`
 - `DISCORD_VOICE_ACK_ENABLED` - speak a short acknowledgement before processing, default `true`
-- `DISCORD_VOICE_ACK_TEXT` - acknowledgement phrase, default `Hmm...`
+- `DISCORD_VOICE_ACK_TEXT` - acknowledgement phrase, or `|`-separated phrase list, default rotates short acknowledgements
+- `DISCORD_VOICE_ACK_COOLDOWN_MS` - minimum time between spoken acknowledgements, default `12000`
 - `DISCORD_TTS_VOICE` - Windows TTS voice name, default `Microsoft Zira Desktop`
+- `DISCORD_VOICE_REPLY_MAX_CHARS` - target max spoken reply length, default `240`
+- `DISCORD_VOICE_REPLY_MAX_SENTENCES` - target max spoken reply sentences, default `2`
+- `DISCORD_VOICE_CONTEXT_LINES` - recent context lines to feed into reply generation, default `4`
+- `DISCORD_VOICE_FAST_LOCAL_FIRST` - answer simple prompts locally before hitting OpenClaw, default `true`
 - `OPENCLAW_BASE_URL` - Gateway HTTP URL, default auto-detected from local OpenClaw config
 - `OPENCLAW_GATEWAY_TOKEN` - Gateway auth token
 - `OPENCLAW_MODEL` - model/agent alias, default `openclaw/default`
+- `OPENCLAW_AGENT_ID` - OpenClaw agent id, default `sam`
 - `OPENCLAW_REQUEST_TIMEOUT_MS` - Gateway request timeout, default `30000`
+- `OPENCLAW_REPLY_STRATEGY` - one of `session-first`, `http-first`, `session-only`, `http-only`
+- `OPENCLAW_FAST_ANSWER_FIRST` - ask OpenClaw to lead with the direct short answer first, default `true`
+- `OPENCLAW_TOOLS_PROFILE` - optional OpenClaw tool profile override
+- `OPENCLAW_TOOLS_ALLOW` - optional comma-separated tool allowlist override
 - `DISCORD_VOICE_MIN_TURN_MS` - ignore very short captured turns, default `400`
 - `DISCORD_VOICE_END_SILENCE_MS` - silence window before ending a turn, default `900`
 - `FFMPEG_PATH` - optional path to an ffmpeg binary
